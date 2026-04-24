@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Homemade 3D Cube</title>
+<style>
+  body {
+    margin: 0;
+    background: black;
+    overflow: hidden;
+  }
+  canvas {
+    display: block;
+  }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<script>
+// canvas setup
+const canvas = document.getElementById("c");
+const ctx = canvas.getContext("2d");
+canvas.width = window.innerWidth;
+canvas.height = window.innerHeight;
+
+// cube vertices (8 corners of cube)
+let points = [
+  [-1,-1,-1],
+  [ 1,-1,-1],
+  [ 1, 1,-1],
+  [-1, 1,-1],
+  [-1,-1, 1],
+  [ 1,-1, 1],
+  [ 1, 1, 1],
+  [-1, 1, 1]
+];
+
+// edges connecting vertices
+let edges = [
+  [0,1],[1,2],[2,3],[3,0],
+  [4,5],[5,6],[6,7],[7,4],
+  [0,4],[1,5],[2,6],[3,7]
+];
+
+let angle = 0;
+
+// rotation functions (math class finally useful)
+function rotateX(p, a) {
+  let [x,y,z] = p;
+  let cos = Math.cos(a);
+  let sin = Math.sin(a);
+  return [x, y*cos - z*sin, y*sin + z*cos];
+}
+
+function rotateY(p, a) {
+  let [x,y,z] = p;
+  let cos = Math.cos(a);
+  let sin = Math.sin(a);
+  return [x*cos + z*sin, y, -x*sin + z*cos];
+}
+
+// 3D -> 2D perspective projection
+function project(p) {
+  let [x,y,z] = p;
+  let distance = 3;
+  let scale = 400 / (z + distance);
+  return [
+    x * scale + canvas.width/2,
+    y * scale + canvas.height/2
+  ];
+}
+
+function draw() {
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  angle += 0.01;
+
+  // rotate all points
+  let rotated = points.map(p => {
+    let r = rotateX(p, angle);
+    r = rotateY(r, angle * 0.7);
+    return r;
+  });
+
+  // project to 2D
+  let projected = rotated.map(p => project(p));
+
+  // draw edges
+  ctx.strokeStyle = "lime";
+  ctx.lineWidth = 2;
+
+  edges.forEach(edge => {
+    let p1 = projected[edge[0]];
+    let p2 = projected[edge[1]];
+    ctx.beginPath();
+    ctx.moveTo(p1[0], p1[1]);
+    ctx.lineTo(p2[0], p2[1]);
+    ctx.stroke();
+  });
+
+  requestAnimationFrame(draw);
+}
+
+draw();
+</script>
+</body>
+</html>
