@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ubuntu VM Sessions</title>
+  <style>
+    :root { color-scheme: dark; font: 16px system-ui, sans-serif; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #111827; color: #f9fafb; }
+    main { width: min(42rem, calc(100% - 2rem)); box-sizing: border-box; padding: 2rem; border: 1px solid #374151; border-radius: 1rem; background: #1f2937; }
+    h1, h2 { margin-top: 0; }
+    label { display: block; margin: 1rem 0 .35rem; }
+    input { box-sizing: border-box; width: 100%; padding: .7rem; border: 1px solid #4b5563; border-radius: .4rem; background: #111827; color: white; }
+    button, a.button { display: inline-block; padding: .7rem 1rem; border: 0; border-radius: .4rem; background: #2563eb; color: white; font: inherit; text-decoration: none; cursor: pointer; }
+    button.secondary { background: #4b5563; }
+    button.danger { background: #b91c1c; }
+    button:disabled { opacity: .5; cursor: wait; }
+    .row { display: flex; flex-wrap: wrap; gap: .65rem; margin-top: 1rem; }
+    .muted { color: #d1d5db; line-height: 1.5; }
+    .notice { min-height: 1.5rem; color: #fbbf24; }
+    .card { margin: 1rem 0; padding: 1rem; border-radius: .5rem; background: #111827; }
+    .hidden { display: none; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: .5rem; border-bottom: 1px solid #374151; text-align: left; }
+    code { overflow-wrap: anywhere; }
+  </style>
+</head>
+<body>
+  <main>
+    <section id="login">
+      <h1>Ubuntu VM</h1>
+      <p class="muted">Sign in to start or resume your private desktop. Accounts are created by an administrator; public signup is disabled.</p>
+      <form id="login-form">
+        <label for="login-user">Username</label>
+        <input id="login-user" name="username" autocomplete="username" required>
+        <label for="login-password">Password</label>
+        <input id="login-password" name="password" type="password" autocomplete="current-password" required>
+        <div class="row"><button type="submit">Sign in</button></div>
+      </form>
+    </section>
+
+    <section id="dashboard" class="hidden">
+      <h1>Ubuntu VM</h1>
+      <p class="muted">Signed in as <strong id="username"></strong></p>
+      <div class="card">
+        <h2>Your desktop</h2>
+        <p id="session-status" class="muted">Loading session...</p>
+        <p id="session-time" class="muted"></p>
+        <div class="row">
+          <button id="start-session">Start / resume desktop</button>
+          <button id="pause-session" class="secondary">Pause desktop</button>
+          <a id="open-console" class="button hidden" href="/console" target="_blank" rel="noopener">Open console</a>
+        </div>
+        <p class="muted">A running session pauses after 60 minutes. Closing all console tabs pauses it after a 60-second grace period. Logging out of Ubuntu pauses it too. Your virtual disk is retained.</p>
+      </div>
+      <section id="admin-panel" class="card hidden">
+        <h2>Administrator</h2>
+        <form id="create-user-form">
+          <label for="new-username">New username</label>
+          <input id="new-username" name="username" pattern="[a-z0-9][a-z0-9._-]{0,31}" required>
+          <label for="new-password">Account password (12+ characters)</label>
+          <input id="new-password" name="password" type="password" minlength="12" autocomplete="new-password" required>
+          <div class="row"><button type="submit">Create account</button></div>
+        </form>
+        <h3>Accounts</h3>
+        <table><thead><tr><th>Username</th><th>VM state</th><th>Created</th></tr></thead><tbody id="users"></tbody></table>
+      </section>
+      <div class="row"><button id="logout" class="danger">Log out</button></div>
+    </section>
+    <p id="notice" class="notice" role="status"></p>
+  </main>
+  <script>
+    const loginSection = document.getElementById("login");
+    const dashboard = document.getElementById("dashboard");
+    const notice = document.getElementById("notice");
+    let pollTimer = null;
+    const request = async (url, options = {}) => {
+      const response = await fetch(url, {
+        credentials: "same-origin",
+        ...options,
+        headers: {
+          "X-Requested-With": "SessionManager",
+          ...(options.body ? { "Content-Type": "application/json" } : {}),
+          ...(options.headers || {})
+        }
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.detail || `Request failed (${response.status}).`);
+      return payload;
+    };
+    const showNotice = message => { notice.textContent = message || ""; };
+    const updateSession = async () => {
+      const profile = await request("/api/me");
+      document.getElementById("username").textContent = profile.username;
+      document.getElementById("session-status").textContent =
+        `State: ${profile.session.status}${profile.running ? " (VM process active)" : ""}`;
+      const expires = profile.session.expiresAt ? new Date(profile.session.expiresAt) : null;
+      document.getElementById("session-time").textContent = expires
+        ? `This run is scheduled to pause at ${expires.toLocaleTimeString()}.`
+        : "No session time limit is currently running.";
+      document.getElementById("open-console").classList.toggle("hidden", profile.session.status !== "running");
+      document.getElementById("pause-session").disabled = profile.session.status !== "running";
+      document.getElementById("start-session").textContent =
+        profile.session.status === "paused" ? "Resume desktop" : "Start desktop";
+      document.getElementById("admin-panel").classList.toggle("hidden", !profile.isAdmin);
+      if (profile.isAdmin) await refreshUsers();
+    };
+    const refreshUsers = async () => {
+      const result = await request("/api/admin/users");
+      const body = document.getElementById("users");
+      body.replaceChildren();
+      for (const user of result.users) {
+        const row = document.createElement("tr");
+        for (const value of [user.username, user.status, new Date(user.created_at).toLocaleDateString()]) {
+          const cell = document.createElement("td");
+          cell.textContent = value;
+          row.append(cell);
+        }
+        body.append(row);
+      }
+    };
+    const showDashboard = async () => {
+      loginSection.classList.add("hidden");
+      dashboard.classList.remove("hidden");
+      await updateSession();
+      clearInterval(pollTimer);
+      pollTimer = setInterval(() => updateSession().catch(error => showNotice(error.message)), 5000);
+    };
+    document.getElementById("login-form").addEventListener("submit", async event => {
+      event.preventDefault();
+      showNotice("");
+      const fields = new FormData(event.currentTarget);
+      try {
+        await request("/api/login", {
+          method: "POST",
+          body: JSON.stringify({ username: fields.get("username"), password: fields.get("password") })
+        });
+        await showDashboard();
+      } catch (error) {
+        showNotice(error.message);
+      }
+    });
+    document.getElementById("start-session").addEventListener("click", async () => {
+      showNotice("Starting the desktop; first boot starts the Ubuntu installer.");
+      try {
+        await request("/api/session/start", { method: "POST", body: "{}" });
+        await updateSession();
+        showNotice("Desktop started. Select Open console to connect; install Ubuntu the first time it boots.");
+      } catch (error) {
+        showNotice(error.message);
+      }
+    });
+    document.getElementById("pause-session").addEventListener("click", async () => {
+      try {
+        await request("/api/session/pause", { method: "POST", body: "{}" });
+        showNotice("Desktop paused. Its state and disk are retained.");
+        await updateSession();
+      } catch (error) {
+        showNotice(error.message);
+      }
+    });
+    document.getElementById("logout").addEventListener("click", async () => {
+      try {
+        await request("/api/logout", { method: "POST", body: "{}" });
+        clearInterval(pollTimer);
+        dashboard.classList.add("hidden");
+        loginSection.classList.remove("hidden");
+        showNotice("Signed out. Your desktop has been paused.");
+      } catch (error) {
+        showNotice(error.message);
+      }
+    });
+    document.getElementById("create-user-form").addEventListener("submit", async event => {
+      event.preventDefault();
+      const fields = new FormData(event.currentTarget);
+      try {
+        await request("/api/admin/users", {
+          method: "POST",
+          body: JSON.stringify({ username: fields.get("username"), password: fields.get("password") })
+        });
+        event.currentTarget.reset();
+        showNotice("Account created. The new user can sign in.");
+        await refreshUsers();
+      } catch (error) {
+        showNotice(error.message);
+      }
+    });
+    request("/api/me").then(showDashboard).catch(() => {});
+  </script>
+</body>
+</html>
